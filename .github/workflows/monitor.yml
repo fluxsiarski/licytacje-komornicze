@@ -1,0 +1,36 @@
+name: Monitor Licytacji
+
+on:
+  schedule:
+    # Wyzwalanie co 15 minut
+    - cron: '*/15 * * * *'
+  # Pozwala uruchomić ręcznie z poziomu strony GitHub
+  workflow_dispatch:
+
+jobs:
+  check-licytacje:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Pobierz kod z repozytorium
+        uses: actions/checkout@v4
+
+      - name: Ustaw Pythona
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Przywróć cache z poprzednim hashem
+        uses: actions/cache@v4
+        with:
+          path: cache
+          key: hash-cache
+
+      - name: Zainstaluj bibliotekę requests
+        run: pip install requests
+
+      - name: Uruchom skrypt monitorujący
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python monitor.py
