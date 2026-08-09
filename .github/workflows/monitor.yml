@@ -20,17 +20,20 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Przywróć cache z poprzednim hashem
+      - name: Przywróć cache z poprzednim stanem
         uses: actions/cache@v4
         with:
           path: cache
           key: hash-cache
 
-      - name: Zainstaluj bibliotekę requests
-        run: pip install requests
+      - name: Zainstaluj biblioteki
+        run: |
+          pip install requests
+          pip install google-generativeai
 
       - name: Uruchom skrypt monitorujący
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python monitor.py
