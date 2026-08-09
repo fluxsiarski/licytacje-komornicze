@@ -4,35 +4,35 @@ import hashlib
 import re
 
 # ======= KONFIGURACJA ========
-URL = "https://licytacje.komornik.pl/wyszukiwarka/obwieszczenia-o-licytacji?city=Wroc%C5%82aw&mainCategory=REAL_ESTATE"
+URL = "https://licytacje.komornik.pl/wyszukiwarka/obwieszczenia-o-licytacji?city=Wroc%C5%82aw&mainCategory=REAL_ESTATE&province=dolno%C5%9Bl%C4%85skie"
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-HASH_FILE = "cache/listings_hash.txt"
+# Plik do przechowywania poprzedniej listy tytułów
+LISTINGS_FILE = "cache/listings.txt"
 
 # ======= FUNKCJE ========
-def get_listings_hash(url):
-    """Pobiera stronę, wyciąga same ogłoszenia i zwraca ich hash."""
+def get_listings(url):
+    """Pobiera stronę i zwraca listę tytułów ogłoszeń."""
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         text = response.text
 
-        # Wyciągamy wszystkie bloki ogłoszeń.
-        # Każde ogłoszenie zaczyna się od "Licytacja nieruchomości" i kończy na dacie "Początek:"
-        pattern = r'Licytacja nieruchomości.*?Początek:.*?\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}'
+        # Wyciągamy tytuły: wszystko po "Licytacja nieruchomości" do "map_"
+        pattern = r'Licytacja nieruchomości (.*?) map_'
         matches = re.findall(pattern, text, re.DOTALL)
 
-        # Jeśli nie znalazło (np. strona zmieniła strukturę) – używamy starego hasha całej strony
-        if not matches:
-            print("Nie znaleziono ogłoszeń w nowym formacie – używam hasha całej strony.")
-            return hashlib.sha256(text.encode('utf-8')).hexdigest()
+        # Czyścimy tytuły z zbędnych znaków
+        titles = [re.sub(r'\s+', ' ', t).strip() for t in matches]
 
-        # Sortujemy listę, żeby kolejność wyświetlania nie miała znaczenia
-        matches.sort()
-        combined = ''.join(matches)
-        return hashlib.sha256(combined.encode('utf-8')).hexdigest()
+        if not titles:
+            print("Nie znaleziono ogłoszeń – używam hasha całej strony jako awaryjnego.")
+            # Awaryjnie: hash całej strony
+            return [hashlib.sha256(text.encode('utf-8')).hexdigest()]
+
+        return titles
 
     except Exception as e:
         print(f"Błąd pobierania/parsowania: {e}")
@@ -52,44 +52,60 @@ def send_telegram_message(token, chat_id, message):
     except Exception as e:
         print(f"Błąd wysyłki: {e}")
 
-def load_last_hash():
-    if os.path.exists(HASH_FILE):
-        with open(HASH_FILE, "r") as f:
-            return f.read().strip()
+def load_previous_listings():
+    """Wczytuje poprzednią listę tytułów z pliku."""
+    if os.path.exists(LISTINGS_FILE):
+        with open(LISTINGS_FILE, "r", encoding="utf-8") as f:
+            return [line.strip() for line in f.readlines()]
     return None
 
-def save_hash(hash_value):
-    os.makedirs(os.path.dirname(HASH_FILE), exist_ok=True)
-    with open(HASH_FILE, "w") as f:
-        f.write(hash_value)
+def save_listings(listings):
+    """Zapisuje obecną listę tytułów do pliku."""
+    os.makedirs(os.path.dirname(LISTINGS_FILE), exist_ok=True)
+    with open(LISTINGS_FILE, "w", encoding="utf-8") as f:
+        for title in listings:
+            f.write(title + "\n")
 
 def main():
-    print("Monitor uruchomiony (wersja parsująca ogłoszenia)...")
+    print("Monitor uruchomiony (wersja z tytułami)...")
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         print("Brak danych Telegram! Ustaw sekrety.")
         return
 
-    current_hash = get_listings_hash(URL)
-    if current_hash is None:
-        print("Nie udało się pobrać/obliczyć hasha.")
+    current_listings = get_listings(URL)
+    if current_listings is None:
+        print("Nie udało się pobrać listy ogłoszeń.")
         return
 
-    last_hash = load_last_hash()
+    previous_listings = load_previous_listings()
 
-    if last_hash is None:
-        save_hash(current_hash)
-        print("Zapisano stan początkowy (teraz porównujemy tylko ogłoszenia).")
-    elif current_hash != last_hash:
-        save_hash(current_hash)
-        message = (
-            "🔔 <b>NOWA ZMIANA NA STRONIE LICYTACJI!</b>\n\n"
-            f"<a href='{URL}'>Kliknij tutaj, aby zobaczyć</a>\n\n"
-            "Prawdopodobnie dodano nowe ogłoszenie. Sprawdź."
-        )
+    if previous_listings is None:
+        # Pierwsze uruchomienie – zapisujemy stan
+        save_listings(current_listings)
+        print(f"Zapisano stan początkowy. Znaleziono {len(current_listings)} ogłoszeń.")
+        return
+
+    # Porównujemy listy – szukamy nowych tytułów
+    current_set = set(current_listings)
+    previous_set = set(previous_listings)
+
+    new_titles = current_set - previous_set
+
+    if new_titles:
+        # Aktualizujemy zapisany stan
+        save_listings(current_listings)
+
+        # Budujemy wiadomość
+        message = "🔔 <b>NOWE OGŁOSZENIA NA STRONIE LICYTACJI!</b>\n\n"
+        for title in new_titles:
+            message += f"• {title}\n"
+
+        message += f"\n<a href='{URL}'>Kliknij tutaj, aby zobaczyć wszystkie</a>"
+
         send_telegram_message(TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, message)
-        print("Zmiana wykryta – wysłano powiadomienie.")
+        print(f"Zmiana wykryta – dodano {len(new_titles)} nowych ogłoszeń.")
     else:
-        print("Brak zmian (lista ogłoszeń bez zmian).")
+        print("Brak nowych ogłoszeń.")
 
 if __name__ == "__main__":
     main()
